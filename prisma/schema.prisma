@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String     @id @default(uuid())
+  email       String     @unique
+  password    String
+  name        String
+  phoneNumber String?    // NEW: Phone number (optional)
+  address     String?    // NEW: Address (optional)
+  role        UserRole   @default(ATTENDANT)
+  status      UserStatus @default(ACTIVE) // NEW: Account status
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  checkIns CheckIn[]
+
+  @@index([status])
+  @@index([role])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  ATTENDANT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model Room {
+  id          String     @id @default(uuid())
+  roomNumber  String     @unique
+  roomType    String
+  pricePerDay Decimal    @db.Decimal(10, 2)
+  status      RoomStatus @default(AVAILABLE)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  checkIns CheckIn[]
+
+  @@map("rooms")
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+  CLEANING
+}
+
+model CheckIn {
+  id           String        @id @default(uuid())
+  clientName   String
+  phoneNumber  String
+  roomId       String
+  roomNumber   String
+  checkInDate  DateTime
+  checkOutDate DateTime?
+  daysStayed   Int?
+  roomPrice    Decimal       @db.Decimal(10, 2)
+  totalAmount  Decimal?      @db.Decimal(10, 2)
+  status       CheckInStatus @default(CHECKED_IN)
+  attendantId  String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  room      Room @relation(fields: [roomId], references: [id])
+  attendant User @relation(fields: [attendantId], references: [id])
+
+  @@index([checkInDate])
+  @@index([checkOutDate])
+  @@index([status])
+  @@index([roomId])
+  @@map("check_ins")
+}
+
+enum CheckInStatus {
+  CHECKED_IN
+  CHECKED_OUT
+}
