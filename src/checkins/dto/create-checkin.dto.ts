@@ -1,4 +1,5 @@
-import { IsString, IsDateString, IsNumber, IsNotEmpty } from 'class-validator';
+import { IsString, IsDateString, IsNumber, IsNotEmpty, IsEnum, IsOptional } from 'class-validator';
+import { PaymentMethod } from '@prisma/client';
 
 export class CreateCheckinDto {
   @IsString()
@@ -16,6 +17,13 @@ export class CreateCheckinDto {
   @IsDateString()
   checkInDate: string;
 
-  @IsNumber()  // ✅ Should accept number
+  @IsNumber()
   roomPrice: number;
+
+  @IsEnum(PaymentMethod)
+  paymentMethod: PaymentMethod;  // THIS MUST BE HERE
+
+  @IsNumber()
+  @IsOptional()
+  amountPaid?: number;  // THIS MUST BE HERE
 }

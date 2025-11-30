@@ -2,6 +2,9 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCheckinDto } from './dto/create-checkin.dto';
 import { CheckoutDto } from './dto/checkout.dto';
+import { RecordPaymentDto } from './dto/record-payment.dto';
+import { ChangeRoomDto } from './dto/change-room.dto';
+import { PaymentStatus } from '@prisma/client';
 
 @Injectable()
 export class CheckinsService {
@@ -21,6 +24,19 @@ export class CheckinsService {
       throw new BadRequestException('Room is not available');
     }
 
+    // Calculate initial payment status
+    const amountPaid = dto.amountPaid || 0;
+    const roomPrice = Number(dto.roomPrice);
+    
+    let paymentStatus: PaymentStatus;
+    if (dto.paymentMethod === 'FREE' || amountPaid >= roomPrice) {
+      paymentStatus = 'PAID';
+    } else if (amountPaid > 0) {
+      paymentStatus = 'PARTIAL';
+    } else {
+      paymentStatus = 'UNPAID';
+    }
+
     // Create check-in
     const checkin = await this.prisma.checkIn.create({
       data: {
@@ -30,6 +46,9 @@ export class CheckinsService {
         roomNumber: room.roomNumber,
         checkInDate: new Date(dto.checkInDate),
         roomPrice: dto.roomPrice,
+        paymentMethod: dto.paymentMethod,
+        amountPaid: amountPaid,
+        paymentStatus: paymentStatus,
         attendantId,
         status: 'CHECKED_IN',
       },
@@ -52,6 +71,135 @@ export class CheckinsService {
     });
 
     return checkin;
+  }
+
+  async changeRoom(id: string, dto: ChangeRoomDto) {
+    // Get current check-in
+    const checkin = await this.prisma.checkIn.findUnique({
+      where: { id },
+      include: { room: true },
+    });
+
+    if (!checkin) {
+      throw new NotFoundException('Check-in not found');
+    }
+
+    if (checkin.status !== 'CHECKED_IN') {
+      throw new BadRequestException('Can only change room for active check-ins');
+    }
+
+    // Check if new room exists and is available
+    const newRoom = await this.prisma.room.findUnique({
+      where: { id: dto.newRoomId },
+    });
+
+    if (!newRoom) {
+      throw new NotFoundException('New room not found');
+    }
+
+    if (newRoom.status !== 'AVAILABLE') {
+      throw new BadRequestException('New room is not available');
+    }
+
+    const oldRoomId = checkin.roomId;
+    const newRoomPrice = dto.newRoomPrice !== undefined 
+      ? dto.newRoomPrice 
+      : Number(newRoom.pricePerDay);
+
+    // Update check-in with new room
+    const updatedCheckin = await this.prisma.checkIn.update({
+      where: { id },
+      data: {
+        roomId: dto.newRoomId,
+        roomNumber: newRoom.roomNumber,
+        roomPrice: newRoomPrice,
+      },
+      include: {
+        room: true,
+        attendant: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Update room statuses
+    await Promise.all([
+      // Free up old room
+      this.prisma.room.update({
+        where: { id: oldRoomId },
+        data: { status: 'AVAILABLE' },
+      }),
+      // Occupy new room
+      this.prisma.room.update({
+        where: { id: dto.newRoomId },
+        data: { status: 'OCCUPIED' },
+      }),
+    ]);
+
+    return updatedCheckin;
+  }
+
+  async recordPayment(id: string, dto: RecordPaymentDto) {
+    const checkin = await this.prisma.checkIn.findUnique({
+      where: { id },
+    });
+
+    if (!checkin) {
+      throw new NotFoundException('Check-in not found');
+    }
+
+    if (checkin.status === 'CHECKED_OUT') {
+      throw new BadRequestException('Cannot record payment for checked-out guest');
+    }
+
+    // Calculate new payment total
+    const currentPaid = Number(checkin.amountPaid);
+    const newPayment = Number(dto.amount);
+    const totalPaid = currentPaid + newPayment;
+    const roomPrice = Number(checkin.roomPrice);
+
+    // Calculate total amount if checkout date exists
+    let amountDue = roomPrice;
+    if (checkin.checkOutDate) {
+      const checkOutDate = new Date(checkin.checkOutDate);
+      const checkInDate = new Date(checkin.checkInDate);
+      const diffTime = Math.abs(checkOutDate.getTime() - checkInDate.getTime());
+      const daysStayed = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+      amountDue = roomPrice * daysStayed;
+    }
+
+    // Determine payment status
+    let paymentStatus: PaymentStatus;
+    if (totalPaid >= amountDue) {
+      paymentStatus = 'PAID';
+    } else if (totalPaid > 0) {
+      paymentStatus = 'PARTIAL';
+    } else {
+      paymentStatus = 'UNPAID';
+    }
+
+    return this.prisma.checkIn.update({
+      where: { id },
+      data: {
+        amountPaid: totalPaid,
+        paymentMethod: dto.paymentMethod,
+        paymentStatus: paymentStatus,
+      },
+      include: {
+        room: true,
+        attendant: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
   }
 
   async checkout(id: string, dto: CheckoutDto) {
@@ -77,6 +225,25 @@ export class CheckinsService {
     
     const totalAmount = Number(checkin.roomPrice) * daysStayed;
 
+    // Handle additional payment at checkout
+    let finalAmountPaid = Number(checkin.amountPaid);
+    let finalPaymentMethod = checkin.paymentMethod;
+    
+    if (dto.additionalPayment && dto.additionalPayment > 0) {
+      finalAmountPaid += Number(dto.additionalPayment);
+      finalPaymentMethod = dto.paymentMethod || checkin.paymentMethod;
+    }
+
+    // Determine final payment status
+    let paymentStatus: PaymentStatus;
+    if (checkin.paymentMethod === 'FREE' || finalAmountPaid >= totalAmount) {
+      paymentStatus = 'PAID';
+    } else if (finalAmountPaid > 0) {
+      paymentStatus = 'PARTIAL';
+    } else {
+      paymentStatus = 'UNPAID';
+    }
+
     // Update check-in record
     const updatedCheckin = await this.prisma.checkIn.update({
       where: { id },
@@ -84,6 +251,9 @@ export class CheckinsService {
         checkOutDate,
         daysStayed,
         totalAmount,
+        amountPaid: finalAmountPaid,
+        paymentMethod: finalPaymentMethod,
+        paymentStatus: paymentStatus,
         status: 'CHECKED_OUT',
       },
       include: {
@@ -152,6 +322,7 @@ export class CheckinsService {
             email: true,
           },
         },
+        reservation: true,
       },
     });
 
@@ -165,6 +336,27 @@ export class CheckinsService {
   async getCurrentGuests() {
     return this.prisma.checkIn.findMany({
       where: { status: 'CHECKED_IN' },
+      include: {
+        room: true,
+        attendant: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { checkInDate: 'desc' },
+    });
+  }
+
+  async getOutstandingPayments() {
+    return this.prisma.checkIn.findMany({
+      where: {
+        paymentStatus: {
+          in: ['UNPAID', 'PARTIAL'],
+        },
+      },
       include: {
         room: true,
         attendant: {

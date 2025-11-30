@@ -8,7 +8,11 @@
     "start:prod": "node dist/src/main.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/cli": "^11.0.10",
@@ -33,7 +37,7 @@
     "@types/node": "^20.3.1",
     "@types/passport-jwt": "^3.0.13",
     "prisma": "^5.7.0",
-    "ts-node": "^10.9.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.1.3"
   }
 }

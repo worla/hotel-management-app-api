@@ -12,14 +12,16 @@ model User {
   email       String     @unique
   password    String
   name        String
-  phoneNumber String?    // NEW: Phone number (optional)
-  address     String?    // NEW: Address (optional)
+  phoneNumber String?
+  address     String?
   role        UserRole   @default(ATTENDANT)
-  status      UserStatus @default(ACTIVE) // NEW: Account status
+  status      UserStatus @default(ACTIVE)
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  checkIns CheckIn[]
+  checkIns     CheckIn[]
+  reservations Reservation[]
+  sales        Sale[]        // NEW: POS sales
 
   @@index([status])
   @@index([role])
@@ -46,45 +48,226 @@ model Room {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  checkIns CheckIn[]
+  checkIns     CheckIn[]
+  reservations Reservation[]
 
+  @@index([status])
+  @@index([roomType])
   @@map("rooms")
 }
 
 enum RoomStatus {
   AVAILABLE
   OCCUPIED
+  RESERVED
   MAINTENANCE
   CLEANING
 }
 
 model CheckIn {
-  id           String        @id @default(uuid())
-  clientName   String
-  phoneNumber  String
-  roomId       String
-  roomNumber   String
-  checkInDate  DateTime
-  checkOutDate DateTime?
-  daysStayed   Int?
-  roomPrice    Decimal       @db.Decimal(10, 2)
-  totalAmount  Decimal?      @db.Decimal(10, 2)
-  status       CheckInStatus @default(CHECKED_IN)
-  attendantId  String
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id            String        @id @default(uuid())
+  clientName    String
+  phoneNumber   String
+  roomId        String
+  roomNumber    String
+  checkInDate   DateTime
+  checkOutDate  DateTime?
+  daysStayed    Int?
+  roomPrice     Decimal       @db.Decimal(10, 2)
+  totalAmount   Decimal?      @db.Decimal(10, 2)
+  
+  paymentMethod PaymentMethod @default(CASH)
+  amountPaid    Decimal       @default(0) @db.Decimal(10, 2)
+  paymentStatus PaymentStatus @default(UNPAID)
+  
+  status        CheckInStatus @default(CHECKED_IN)
+  attendantId   String
+  reservationId String?       @unique
+  
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  room      Room @relation(fields: [roomId], references: [id])
-  attendant User @relation(fields: [attendantId], references: [id])
+  room        Room         @relation(fields: [roomId], references: [id])
+  attendant   User         @relation(fields: [attendantId], references: [id])
+  reservation Reservation? @relation(fields: [reservationId], references: [id])
+  sales       Sale[]       // NEW: POS sales linked to guest
 
   @@index([checkInDate])
   @@index([checkOutDate])
   @@index([status])
   @@index([roomId])
+  @@index([paymentStatus])
   @@map("check_ins")
 }
 
 enum CheckInStatus {
   CHECKED_IN
   CHECKED_OUT
+}
+
+enum PaymentMethod {
+  CASH
+  MOMO
+  CARD
+  FREE
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+model Reservation {
+  id               String            @id @default(uuid())
+  
+  clientName       String
+  phoneNumber      String
+  email            String?
+  
+  roomId           String?
+  roomType         String
+  
+  checkInDate      DateTime
+  checkOutDate     DateTime
+  numberOfDays     Int
+  
+  pricePerDay      Decimal           @db.Decimal(10, 2)
+  totalAmount      Decimal           @db.Decimal(10, 2)
+  
+  paymentMethod    PaymentMethod     @default(CASH)
+  paymentStatus    PaymentStatus     @default(UNPAID)
+  amountPaid       Decimal           @default(0) @db.Decimal(10, 2)
+  balanceDue       Decimal           @db.Decimal(10, 2)
+  
+  status           ReservationStatus @default(PENDING)
+  
+  attendantId      String
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  attendant User      @relation(fields: [attendantId], references: [id])
+  room      Room?     @relation(fields: [roomId], references: [id])
+  checkIn   CheckIn?
+
+  @@index([checkInDate])
+  @@index([checkOutDate])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([roomType])
+  @@map("reservations")
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CANCELLED
+  NO_SHOW
+  COMPLETED
+}
+
+// ==================== POS SYSTEM ====================
+
+// Product Categories
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+// Products/Items for sale
+model Product {
+  id          String        @id @default(uuid())
+  name        String
+  description String?
+  sku         String?       @unique  // Stock Keeping Unit
+  categoryId  String
+  price       Decimal       @db.Decimal(10, 2)
+  cost        Decimal?      @db.Decimal(10, 2)  // Cost price (for profit calculation)
+  stock       Int           @default(0)
+  minStock    Int           @default(5)  // Alert when stock is low
+  status      ProductStatus @default(ACTIVE)
+  imageUrl    String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  category  Category   @relation(fields: [categoryId], references: [id])
+  saleItems SaleItem[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([stock])
+  @@map("products")
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  OUT_OF_STOCK
+}
+
+// Sales transactions
+model Sale {
+  id              String        @id @default(uuid())
+  saleNumber      String        @unique  // e.g., "SALE-2025-001"
+  
+  // Customer info (optional - can be walk-in)
+  customerName    String?
+  customerPhone   String?
+  checkInId       String?      // Link to guest if applicable
+  
+  // Sale details
+  subtotal        Decimal       @db.Decimal(10, 2)
+  tax             Decimal       @default(0) @db.Decimal(10, 2)
+  discount        Decimal       @default(0) @db.Decimal(10, 2)
+  total           Decimal       @db.Decimal(10, 2)
+  
+  // Payment
+  paymentMethod   PaymentMethod
+  amountPaid      Decimal       @db.Decimal(10, 2)
+  change          Decimal       @default(0) @db.Decimal(10, 2)
+  paymentStatus   PaymentStatus @default(PAID)
+  
+  // Metadata
+  attendantId     String
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  attendant User      @relation(fields: [attendantId], references: [id])
+  checkIn   CheckIn? @relation(fields: [checkInId], references: [id])
+  items     SaleItem[]
+
+  @@index([saleNumber])
+  @@index([checkInId])
+  @@index([attendantId])
+  @@index([createdAt])
+  @@index([paymentStatus])
+  @@map("sales")
+}
+
+// Individual items in a sale
+model SaleItem {
+  id         String   @id @default(uuid())
+  saleId     String
+  productId  String
+  quantity   Int
+  unitPrice  Decimal  @db.Decimal(10, 2)  // Price at time of sale
+  total      Decimal  @db.Decimal(10, 2)  // quantity * unitPrice
+  createdAt  DateTime @default(now())
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
 }
